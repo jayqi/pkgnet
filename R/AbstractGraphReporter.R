@@ -39,9 +39,27 @@ AbstractGraphReporter <- R6::R6Class(
     active = list(
         pkg_graph = function(){
             if (is.null(private$cache$pkg_graph)){
-                log_info("Creating graph object...")
-                private$make_graph_object()
-                log_info("Done creating graph object")
+                log_info("Creating igraph object...")
+
+                edges <- self$edges
+                nodes <- self$nodes
+
+                if (nrow(edges) > 0) {
+                    # A graph with edges
+                    connectedGraph <- igraph::graph.edgelist(
+                        as.matrix(edges[,list(SOURCE,TARGET)])
+                        , directed = TRUE
+                    )
+                } else {
+                    connectedGraph <- igraph::make_empty_graph()
+                }
+
+                orphanNodes <- base::setdiff(nodes, names(igraph::V(connectedGraph)))
+
+                fullGraph <- connectedGraph + igraph::vertex(allNodes)
+
+                private$cache$pkg_graph <- fullGraph
+                log_info("Done creating igraph object")
             }
             return(private$cache$pkg_graph)
         },
@@ -216,36 +234,6 @@ AbstractGraphReporter <- R6::R6Class(
 
             #motifs?
             #knn/assortivity?
-
-            return(invisible(NULL))
-        },
-
-        # Creates pkg_graph igraph object
-        # Requires edges and nodes
-        make_graph_object = function(){
-            edges <- self$edges
-            nodes <- self$nodes
-
-            if (nrow(edges) > 0) {
-
-                # A graph with edges
-                inGraph <- igraph::graph.edgelist(
-                    as.matrix(edges[,list(SOURCE,TARGET)])
-                    , directed = TRUE
-                )
-
-                # add isolated nodes
-                allNodes <- nodes$node
-                nonConnectedNodes <- base::setdiff(allNodes, names(igraph::V(inGraph)))
-
-                outGraph <- inGraph + igraph::vertex(nonConnectedNodes)
-            } else {
-                # An unconnected graph
-                allNodes <- nodes$node
-                outGraph <- igraph::make_empty_graph() + igraph::vertex(allNodes)
-            }
-
-            private$cache$pkg_graph <- outGraph
 
             return(invisible(NULL))
         },
@@ -450,7 +438,7 @@ AbstractGraphReporter <- R6::R6Class(
                 self$nodes[, node]
                 , unique(c(self$edges[, SOURCE], self$edges[, TARGET]))
             )
-            
+
             # If there are none, then will be character(0)
             return(orphan_nodes)
         },
