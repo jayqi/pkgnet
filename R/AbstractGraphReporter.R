@@ -39,37 +39,13 @@ AbstractGraphReporter <- R6::R6Class(
     active = list(
         pkg_graph = function(){
             if (is.null(private$cache$pkg_graph)){
-                log_info("Creating igraph object...")
-
-                edges <- self$edges
-                nodes <- self$nodes
-
-                if (nrow(edges) > 0) {
-                    # A graph with edges
-                    connectedGraph <- igraph::graph.edgelist(
-                        as.matrix(edges[,list(SOURCE,TARGET)])
-                        , directed = TRUE
-                    )
-                } else {
-                    connectedGraph <- igraph::make_empty_graph()
-                }
-
-                orphanNodes <- base::setdiff(nodes, names(igraph::V(connectedGraph)))
-
-                fullGraph <- connectedGraph + igraph::vertex(allNodes)
-
-                private$cache$pkg_graph <- fullGraph
-                log_info("Done creating igraph object")
+                private$cache$pkg_graph <- DirectedGraph$new(self$nodes, self$edges)
             }
             return(private$cache$pkg_graph)
         },
         network_measures = function(){
             if (is.null(private$cache$network_measures)){
-                log_info("Calculating network measures...")
-                # Set from NULL to empty list
-                private$cache$network_measures <- list()
-                private$calculate_network_measures()
-                log_info("Done calculating network measures.")
+                self$pkg_graph$calculate_all_measures()
             }
             return(private$cache$network_measures)
         },
@@ -80,12 +56,6 @@ AbstractGraphReporter <- R6::R6Class(
                 log_info('Done creating graph visualization plot.')
             }
             return(private$cache$graph_viz)
-        },
-        orphan_nodes = function() {
-            if (is.null(private$cache$orphan_nodes)) {
-                private$cache$orphan_nodes <- private$identify_orphan_nodes()
-            }
-            return(private$cache$orphan_nodes)
         },
         layout_type = function(value) {
 
@@ -100,26 +70,6 @@ AbstractGraphReporter <- R6::R6Class(
                 private$private_layout_type <- value
             }
             return(private$private_layout_type)
-        },
-        orphan_node_clustering_threshold = function(value) {
-
-            # If the person isn't using <- assignment, return the cached value
-            if (!missing(value)) {
-                if (class(value) != 'numeric') {
-                    log_fatal("orphan_node_clustering_threshold must be numeric.")
-                }
-
-                if (value < 1) {
-                    log_fatal("orphan_node_clustering_threshold must at least 1.")
-                }
-
-                # Set new value and reset graph viz
-                if (!is.null(private$cache$graph_viz)) {
-                    private$reset_graph_viz()
-                }
-                private$private_orphan_node_clustering_threshold <- value
-            }
-            return(private$private_orphan_node_clustering_threshold)
         }
     ),
 
@@ -145,96 +95,7 @@ AbstractGraphReporter <- R6::R6Class(
 
         # Calculate graph-related measures for pkg_graph
         calculate_network_measures = function(){
-
-            # Use igraph object
-            pkg_graph <- self$pkg_graph
-
-            # Pointer to cached nodes data.table
-            # Note that this is a reference, so changes will update cached table
-            outNodeDT <- self$nodes
-
-            #--------------#
-            # out degree
-            #--------------#
-            outDegreeResult <- igraph::centralization.degree(
-                graph = pkg_graph
-                , mode = "out"
-            )
-
-            # update data.tables
-            outNodeDT[, outDegree := outDegreeResult[['res']]] # nodes
-            private$cache$network_measures[['centralization.OutDegree']] <- outDegreeResult$centralization
-
-            #--------------#
-            # betweeness
-            #--------------#
-            outBetweenessResult <- igraph::centralization.betweenness(
-                graph = pkg_graph
-                , directed = TRUE
-            )
-
-            # update data.tables
-            outNodeDT[, outBetweeness := outBetweenessResult$res] # nodes
-            private$cache$network_measures[['centralization.betweenness']] <- outBetweenessResult$centralization
-
-            #--------------#
-            # closeness
-            #--------------#
-            suppressWarnings({
-                outClosenessResult <- igraph::centralization.closeness(
-                    graph = pkg_graph
-                    , mode = "out"
-                )
-            })
-
-            # update data.tables
-            outNodeDT[, outCloseness := outClosenessResult$res] # nodes
-            private$cache$network_measures[['centralization.closeness']] <- outClosenessResult$centralization
-
-            #--------------------------------------------------------------#
-            # NODE ONLY METRICS
-            #--------------------------------------------------------------#
-
-            #--------------#
-            # Number of Decendants - a.k.a neightborhood or ego
-            #--------------#
-            neighborHoodSizeResult <- igraph::neighborhood.size(
-                graph = pkg_graph
-                , order = vcount(pkg_graph)
-                , mode = "out"
-            )
-
-            # update data.tables
-            outNodeDT[, numDescendants := neighborHoodSizeResult] # nodes
-
-            #--------------#
-            # Hub Score
-            #--------------#
-            hubScoreResult <- igraph::hub_score(
-                graph = pkg_graph
-                , scale = TRUE
-            )
-            outNodeDT[, hubScore := hubScoreResult$vector] # nodes
-
-            #--------------#
-            # PageRank
-            #--------------#
-            pageRankResult <- igraph::page_rank(graph = pkg_graph, directed = TRUE)
-            outNodeDT[, pageRank := pageRankResult$vector] # nodes
-
-            #--------------#
-            # in degree
-            #--------------#
-            inDegreeResult <- igraph::degree(pkg_graph, mode = "in")
-            outNodeDT[, inDegree := inDegreeResult] # nodes
-
-            #--------------------------------------------------------------#
-            # NETWORK ONLY METRICS
-            #--------------------------------------------------------------#
-
-            #motifs?
-            #knn/assortivity?
-
+            self$pkg_graph$calculate_all_measures()
             return(invisible(NULL))
         },
 
@@ -279,22 +140,6 @@ AbstractGraphReporter <- R6::R6Class(
             return(invisible(NULL))
         },
 
-        # Function to update nodes
-        # This function updates the cached nodes data.table, and if it exists, the pkg_graph object
-        update_nodes = function(metadataDT) {
-            log_info('Updating cached nodes data.table with metadata...')
-
-            # Merge new DT with cached DT, but overwrite any colliding columns
-            colsToKeep <- setdiff(names(self$nodes), names(metadataDT))
-            private$cache$nodes <- merge(
-                x = self$nodes[, .SD, .SDcols = c("node", colsToKeep)]
-                , y = metadataDT
-                , by = "node"
-                , all.x = TRUE
-            )
-            return(invisible(NULL))
-        },
-
         # Creates visNetwork graph viz object
         # Uses pkg_graph active binding
         plot_network = function(){
@@ -304,7 +149,6 @@ AbstractGraphReporter <- R6::R6Class(
             # TODO:
             # Open these up to users or remove all the active binding code
             self$layout_type <- "tree"
-            self$orphan_node_clustering_threshold <- 10
 
             # format for plot
             plotDTnodes <- data.table::copy(self$nodes) # Don't modify original
@@ -388,20 +232,6 @@ AbstractGraphReporter <- R6::R6Class(
 
             } # end color field creation
 
-            # If threshold to group orphan nodes, then assign group
-            numOrphanNodes <- length(self$orphanNodes)
-            numOrphanThreshold <- self$orphan_node_clustering_threshold
-            if (numOrphanNodes > numOrphanThreshold) {
-                log_info(paste(sprintf("Number of orphan nodes %s exceeds orphanNodeClusteringThreshold %s."
-                                       , numOrphanNodes
-                                       , numOrphanThreshold
-                )
-                , "Clustering orphan nodes..."
-                ))
-                plotDTnodes[, group := NA_character_]
-                plotDTnodes[node %in% self$orphan_nodes, group := "orphan"]
-            }
-
             # Create Plot
             g <- visNetwork::visNetwork(nodes = plotDTnodes
                                         , edges = plotDTedges) %>%
@@ -411,11 +241,6 @@ AbstractGraphReporter <- R6::R6Class(
                 visNetwork::visOptions(highlightNearest = list(enabled = TRUE
                                                                , degree = nrow(plotDTnodes) # guarantee full path
                                                                , algorithm = "hierarchical"))
-
-            # Add orphan node clustering
-            if (numOrphanNodes > numOrphanThreshold) {
-                g <- g %>% visNetwork::visClusteringByGroup(groups = c("orphan"))
-            }
 
             log_info("Done creating plot.")
 
@@ -454,12 +279,12 @@ AbstractGraphReporter <- R6::R6Class(
 
             # Calculate positions for specified layout_type
             graph_func <- private$graph_layout_functions[[self$layout_type]]
-            plotMat <- graph_func(self$pkg_graph)
+            plotMat <- graph_func(self$pkg_graph$igraph_connected)
 
             # It might be important to get the nodes from pkg_graph so that they
             # are in the same order as in plotMat?
             coordsDT <- data.table::data.table(
-                node = names(igraph::V(self$pkg_graph))
+                node = names(igraph::V(self$pkg_graph$igraph_connected))
                 , level = plotMat[, 2]
                 , horizontal = plotMat[, 1]
             )
@@ -475,4 +300,330 @@ AbstractGraphReporter <- R6::R6Class(
             return(plotDT)
         }
     )
+)
+
+DirectedGraph <- R6::R6Class(
+    classname = "DirectedGraph"
+
+    , public = list(
+        initialize = function(nodes, edges) {
+            # Store pointers to node and edge data.tables
+            private$protected$nodes <- nodes
+            private$protected$edges <- edges
+
+            # Generate igraph objects
+            private$initialize_igraph()
+
+            return(invisible(self))
+        }
+
+        , node_measure = function(measure){
+            assertthat::assert_that(
+                measure %in% self$available_node_measures()
+                , msg = sprintf('%s not in $available_node_measures()', measure)
+            )
+            if (!measure %in% names(self$nodes)) {
+                result <- private$node_measure_functions[[measure]](self)
+                resultDT <- data.table::data.table(
+                    node_name = names(result)
+                    , result = result
+                )
+                setkeyv(resultDT, 'node_name')
+                self$nodes[, eval(measure) := resultDT[node, result]]
+            }
+            return(self$nodes[, .SD, .SDcols = c('node', measure)])
+        }
+
+        , available_node_measures = function(){
+            names(private$node_measure_functions)
+        }
+
+        , graph_measure = function(measure){
+            assertthat::assert_that(
+                measure %in% self$available_graph_measures()
+                , msg = sprintf('%s not in $available_graph_measures()', measure)
+            )
+            if (!measure %in% names(private$protected$graph_measures)) {
+                result <- private$graph_measure_functions[[measure]](self)
+                private$protected$graph_measures[[measure]] <- result
+            }
+            return(private$protected$graph_measures[[measure]])
+        }
+
+        , available_graph_measures = function(){
+            names(private$graph_measure_functions)
+        }
+
+        , calculate_all_node_measures = function(){
+            lapply(
+                X = self$available_node_measures()
+                , FUN = function(x){
+                    self$node_measure(x)
+                    NULL
+                }
+            )
+            return(self$nodes[, .SD, .SDcols = c('node', self$available_node_measures())])
+        }
+
+        , calculate_all_graph_measures = function(){
+            lapply(
+                X = self$available_graph_measures()
+                , FUN = function(x){
+                    self$graph_measure(x)
+                    NULL
+                }
+            )
+            return(self$graph_measures)
+        }
+
+        , calculate_all_measures = function(){
+            self$calculate_all_node_measures
+            self$calculate_all_graph_measures
+            return(invisible(NULL))
+        }
+
+    ) # /public
+
+    , active = list(
+        # Read-only access to node and edge data.tables
+        nodes = function(){return(private$protected$nodes)}
+        , edges = function(){return(private$protected$edges)}
+
+        # Read-only list storing graph measures
+        , graph_measures = function(){return(private$protected$graph_measures)}
+
+        # Read-only access to igraph objects
+        , igraph_complete = function(){
+            return(private$protected$igraph_complete)
+        }
+        , igraph_connected = function(){
+            return(private$protected$igraph_connected)
+        }
+        , igraph_unconnected = function(){
+            return(private$protected$igraph_unconnected)
+        }
+    ) # /active
+
+    , private = list(
+        protected = list(
+            nodes = NULL
+            , edges = NULL
+            , igraph_complete = NULL
+            , igraph_connected = NULL
+            , igraph_unconnected = NULL
+            , graph_measures = list()
+        )
+
+        , initialize_igraph = function(){
+
+            # Connected graph
+            if (nrow(self$edges) > 0) {
+                # A graph with edges
+                connectedGraph <- igraph::graph.edgelist(
+                    as.matrix(self$edges[,list(SOURCE,TARGET)])
+                    , directed = TRUE
+                )
+            } else {
+                connectedGraph <- igraph::make_empty_graph()
+            }
+
+            # Unconnected graph
+            orphanNodes <- base::setdiff(
+                self$nodes[, node]
+                , unique(c(self$edges[, SOURCE], self$edges[, TARGET]))
+            )
+            unconnectedGraph <- igraph::make_empty_graph() + igraph::vertex(orphanNodes)
+
+            # Complete graph
+            completeGraph <- connectedGraph + unconnectedGraph
+
+            # Store in protected cache
+            private$protected$igraph_connected <- connectedGraph
+            private$protected$igraph_unconnected <- unconnectedGraph
+            private$protected$igraph_complete <- completeGraph
+
+            return(invisible(NULL))
+        }
+
+        # Functions for node measures
+        # All functions should return a named vector of node measure values
+        , node_measure_functions = list(
+
+            # In Degree
+            inDegree = function(self){
+                igraph::degree(
+                    graph = self$igraph_complete
+                    , mode = "in"
+                )
+            }
+
+            # Out Degree
+            , outDegree = function(self){
+                igraph::degree(
+                    graph = self$igraph_complete
+                    , mode = "out"
+                )
+            }
+
+            # Betweenness
+            , betweenness = function(self){
+                igraph::betweenness(
+                    graph = self$igraph_complete
+                    , directed = TRUE
+                )
+            }
+
+            # In Closeness
+            # Closeness doesn't really work for directed graphs that are not
+            # strongly connected.
+            # igraph calculates a thing anyways and gives a warning
+            , inCloseness = function(self){
+                suppressWarnings(igraph::closeness(
+                    graph = self$igraph_complete
+                    , mode = "out"
+                ))
+            }
+
+            # Out Closeness
+            # Closeness doesn't really work for directed graphs that are not
+            # strongly connected.
+            # igraph calculates a thing anyways and gives a warning
+            , outCloseness = function(self){
+                suppressWarnings(igraph::closeness(
+                    graph = self$igraph_complete
+                    , mode = "out"
+                ))
+            }
+
+            # Eigenvector Centrality
+            , eigencentrality = function(self){
+                igraph::eigen_centrality(
+                    graph = self$igraph_complete
+                    , directed = TRUE
+                )$vector
+            }
+
+            # Number of Decendants
+            , numDescendents = function(self){
+                # Calculate using out-neighborhood or out-ego size with max order
+                result <- igraph::neighborhood.size(
+                    graph = self$igraph_complete
+                    , order = igraph::vcount(self$igraph_complete)
+                    , mode = "out"
+                )
+                names(result) <- igraph::V(self$igraph_complete)$name
+                return(result)
+            }
+
+            # Number of Ancestors
+            , numAncestors = function(self){
+                # Calculate using in-neighborhood or out-ego size with max order
+                result <- igraph::neighborhood.size(
+                    graph = self$igraph_complete
+                    , order = igraph::vcount(self$igraph_complete)
+                    , mode = "in"
+                )
+                names(result) <- igraph::V(self$igraph_complete)$name
+                return(result)
+            }
+
+            # Page Rank
+            , pageRank = function(self){
+                igraph::page_rank(
+                    graph = self$igraph_complete
+                    , directed = TRUE
+                )$vector
+            }
+
+            # Hub Score
+            , hubScore = function(self){
+                igraph::hub_score(
+                    graph = self$igraph_complete
+                    , scale = TRUE
+                )$vector
+            }
+
+            # Authority Score
+            , authorityScore = function(self){
+                igraph::authority_score(
+                    graph = self$igraph_complete
+                    , scale = TRUE
+                )$vector
+            }
+
+        )
+
+        , graph_measure_functions = list(
+
+            graphInDegree = function(self){
+                measure <- 'inDegree'
+                igraph::centralize(
+                    scores = self$node_measure(measure)[, get(measure)]
+                    , theoretical.max = igraph::centr_degree_tmax(
+                        graph = self$igraph_complete
+                        , mode = "in"
+                        , loops = TRUE
+                    )
+                    , normalized = TRUE
+                )
+            }
+
+            , graphOutDegree = function(self){
+                measure <- 'outDegree'
+                igraph::centralize(
+                    scores = self$node_measure(measure)[, get(measure)]
+                    , theoretical.max = igraph::centr_degree_tmax(
+                        graph = self$igraph_complete
+                        , mode = "out"
+                        , loops = TRUE
+                    )
+                    , normalized = TRUE
+                )
+            }
+
+            , graphBetweenness = function(self){
+                measure <- 'betweenness'
+                igraph::centralize(
+                    scores = self$node_measure(measure)[, get(measure)]
+                    , theoretical.max = igraph::centr_betw_tmax(
+                        graph = self$igraph_complete
+                        , directed = TRUE)
+                    , normalized = TRUE
+                )
+            }
+
+            , graphInCloseness = function(self){
+                measure <- 'inCloseness'
+                igraph::centralize(
+                    scores = self$node_measure(measure)[, get(measure)]
+                    , theoretical.max = igraph::centr_clo_tmax(
+                        graph = self$igraph_complete
+                        , mode = "in")
+                    , normalized = TRUE
+                )
+            }
+
+            , graphOutCloseness = function(self){
+                measure <- 'outCloseness'
+                igraph::centralize(
+                    scores = self$node_measure(measure)[, get(measure)]
+                    , theoretical.max = igraph::centr_clo_tmax(
+                        graph = self$igraph_complete
+                        , mode = "out")
+                    , normalized = TRUE
+                )
+            }
+
+            , graphEigencentrality = function(self){
+                measure <- 'eigencentrality'
+                igraph::centralize(
+                    scores = self$node_measure(measure)[, get(measure)]
+                    , theoretical.max = igraph::centr_eigen_tmax(
+                        graph = self$igraph_complete
+                        , directed = TRUE)
+                    , normalized = TRUE
+                )
+            }
+        )
+    )  # /private
 )
