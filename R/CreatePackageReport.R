@@ -123,3 +123,65 @@ CreatePackageReport <- function(pkg_name
 
       return(pkg_reporters)
 }
+
+#' @export
+CreatePackageVignette <- function(pkg_name
+                                  , pkg_path = NULL
+                                  , vignette_path = file.path("vignettes"
+                                                              , "pkgnet_report.Rmd")
+                                  , pkg_reporters = list(
+                                        DependencyReporter$new()
+                                        , FunctionReporter$new()
+                                    )
+                                  ) {
+    # Capture pkg_reporters expression
+    pkg_reporters_expr <- rlang::enexpr(pkg_reporters)
+
+    # Input checks
+    assertthat::assert_that(
+        assertthat::is.string(pkg_name)
+        , pkg_name != ""
+        , is.list(pkg_reporters)
+        , is.null(pkg_path) || assertthat::is.readable(pkg_path)
+        , assertthat::is.string(vignette_path)
+        , vignette_path != ""
+    )
+
+    # Confirm that the vignette_path looks correct
+    if (! identical(tolower(tools::file_ext(vignette_path)), "rmd")){
+        log_fatal(sprintf("vignette_path must be a .Rmd file path. You gave '%s'.", vignette_path))
+    }
+
+    # Confirm that all reporters are actually reporters
+    checks <- sapply(pkg_reporters, function(x){methods::is(x, "AbstractPackageReporter")})
+    if (!all(checks)){
+        msg <- paste0("At least one of the reporters in the pkg_reporters parameter ",
+                      "is not a PackageReporter. See ?AbstractPackageReporter for details.")
+        log_fatal(msg)
+    }
+
+    # If pkg_path supplied, add quotes, otherwise, NULL as a string
+    if (!is.null(pkg_path)) {
+        pkg_path <- paste0("\"", pkg_path, "\"")
+    } else {
+        pkg_path <- "NULL"
+    }
+
+    # Read pkgnet vignette template
+    templatePath <- system.file(file.path("package_report"
+                                          , "package_vignette_template.Rmd")
+                                , package = "pkgnet")
+
+    vignette_rmd <- glue::glue(
+        paste(readLines(templatePath), collapse = "\n")
+        , pkg_name = pkg_name
+        , pkg_path = pkg_path
+        , pkg_reporters = deparse(pkg_reporters_expr)
+        , .open = "{{"
+        , .close = "}}"
+    )
+
+    rmd_conn <- file(description = vignette_path, open = 'w+')
+    writeLines(vignette_rmd, con = rmd_conn)
+    close(rmd_conn)
+}
