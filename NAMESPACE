@@ -3,6 +3,7 @@
 export(AbstractGraphReporter)
 export(AbstractPackageReporter)
 export(CreatePackageReport)
+export(CreatePackageVignette)
 export(DefaultReporters)
 export(DependencyReporter)
 export(FunctionReporter)

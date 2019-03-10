@@ -1,3 +1,5 @@
+Meta
+doc
 # Misc files
 .Rhistory
 *.Rproj
@@ -8,19 +10,15 @@ tests/testthat/Rplots.pdf
 **/*.rds
 **/*.rda
 **/*.csv
-
 # Keep data files in testdata
 !/tests/testthat/testdata/*.csv
-
 # build artifacts
 **/*.tar.gz
 pkgnet.Rcheck/*
 .Rproj.user
-
 # Compiled vignette
 inst/doc/*
 Meta/*
 doc/*
-
 # aspell stuff
 **/*.bak
